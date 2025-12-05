@@ -1,0 +1,17 @@
+# No subir datos brutos ni figuras generadas
+data/
+figures/
+
+# Cachés de Python
+__pycache__/
+*.pyc
+
+# Cachés de notebooks
+.ipynb_checkpoints/
+
+# Archivos locales con credenciales o variables de entorno
+.cdsapirc
+*.env
+
+# Basura típica de sistema (macOS, etc.)
+.DS_Store
