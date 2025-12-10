@@ -1,0 +1,99 @@
+# 03. Georreferenciación y Análisis de Vulnerabilidad Térmica
+
+Este módulo se centra en la identificación espacial de zonas vulnerables al calor en el municipio de Córdoba. Se ha implementado una metodología de **"Cobertura Negativa"**: en lugar de mapear el calor, mapeamos los "oasis" (refugios) para que las zonas oscuras revelen los barrios desprotegidos.
+
+## 1. Metodología
+
+1.  **Ingesta de Datos:** Procesamiento de archivo KML de google.
+2.  **Filtrado Crítico:** Eliminación de la categoría **"Iglesias"** del dataset de refugios activos (por no estar operativas/climatizadas en verano).
+3.  **Visualización (Python):** Generación de mapa de calor inverso sobre base oscura (`CartoDB Dark Matter`).
+4.  **Validación (GEE):** Contraste con datos satelitales de Zonas Climáticas Locales (LCZ) para confirmar islas de calor físicas.
+
+---
+
+## 2. Código Python: Generación del Mapa de Vulnerabilidad
+
+Script optimizado para entornos sin conexión a internet (usa librerías estándar `xml` y `folium`).
+
+### Lógica del Algoritmo
+* **Input:** `Refugios_climaticos_Cordoba (1).kml`
+* **Filtro:** `if "Iglesias" in nombre_categoria: continue`
+* **Simbología:** Gradiente frío (Azul $\to$ Verde Lima).
+* **Interpretación:** *  **Brillante/Verde:** Zona Segura (Cobertura < 5 min a pie).
+    * ⚫ **Oscuro/Negro:** **ZONA VULNERABLE** (Riesgo térmico).
+
+```python
+import folium
+from folium.plugins import HeatMap
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+# 1. Carga de Datos (Agnóstica del SO)
+archivo = "Refugios_climaticos_Cordoba (1).kml"
+ruta = Path.home() / "Downloads" / archivo
+if not ruta.exists(): ruta = Path(archivo)
+
+puntos_refugio = []
+
+# 2. Parsing KML y Filtrado
+try:
+    tree = ET.parse(ruta)
+    root = tree.getroot()
+    # Namespace necesario para leer KML modernos
+    ns = {'k': '[http://www.opengis.net/kml/2.2](http://www.opengis.net/kml/2.2)'}
+
+    for folder in root.findall('.//k:Folder', ns):
+        categoria = folder.find('k:name', ns).text.strip()
+        
+        # --- FILTRO DE CALIDAD ---
+        # Excluimos Iglesias (no son refugios climáticos reales en verano)
+        if "Iglesias" in categoria: 
+            print(f"Excluyendo capa: {categoria}")
+            continue
+            
+        # Extracción de coordenadas (Puntos y Polígonos)
+        for p in folder.findall('k:Placemark', ns):
+            coords = None
+            # Si es Punto
+            if p.find('k:Point', ns): 
+                coords = p.find('k:Point/k:coordinates', ns).text.strip()
+            # Si es Polígono (Parque), tomamos el primer punto como centro
+            elif p.find('.//k:Polygon', ns): 
+                coords = p.find('.//k:Polygon//k:coordinates', ns).text.strip().split()[0]
+            
+            if coords:
+                lon, lat, *_ = coords.split(',')
+                puntos_refugio.append([float(lat), float(lon)])
+
+    print(f"✅ Procesados {len(puntos_refugio)} refugios activos.")
+
+    # 3. Visualización: Vulnerabilidad por Contraste
+    # Fondo oscuro para resaltar la "luz" (refugios)
+    m = folium.Map(location=[37.8882, -4.7794], zoom_start=13, tiles='CartoDB dark_matter')
+
+    # Gradiente de Seguridad: Azul (Cobertura media) -> Verde (Refugio seguro)
+    # Las zonas que quedan en NEGRO son las vulnerables.
+    HeatMap(
+        puntos_refugio, 
+        radius=35, 
+        blur=20, 
+        gradient={0.4: '#00ffff', 0.65: '#00ff00', 1.0: '#ffff00'} 
+    ).add_to(m)
+
+    # Añadir Leyenda Flotante
+    leyenda_html = '''
+    <div style="position: fixed; bottom: 50px; left: 50px; z-index: 9999; 
+                background-color: rgba(0,0,0,0.7); color: white;
+                padding: 10px; border: 1px solid white; border-radius: 5px;">
+        <b>Mapa de Cobertura</b><br>
+        <i style="background: #00ff00; width: 10px; height: 10px; display: inline-block; border-radius: 50%;"></i> Zona Protegida<br>
+        <i style="background: black; border: 1px solid grey; width: 10px; height: 10px; display: inline-block; border-radius: 50%;"></i> <b>ZONA VULNERABLE</b>
+    </div>
+    '''
+    m.get_root().html.add_child(folium.Element(leyenda_html))
+
+    m.save("mapa_vulnerabilidad.html")
+    print("Mapa guardado como 'mapa_vulnerabilidad.html'")
+
+except Exception as e:
+    print(f"Error procesando KML: {e}")
